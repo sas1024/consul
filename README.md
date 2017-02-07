@@ -23,6 +23,10 @@ de-register a service with local agent
 
 get KVPair
 
+### WatchGet(key string) chan *consulapi.KVPair
+
+watch create/update KVPair 
+
 ### GetStr(key string) (string, error)
 
 get string value

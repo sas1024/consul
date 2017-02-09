@@ -53,9 +53,12 @@ func NewClientWithConsulClient(c *consulapi.Client) Client {
 }
 
 // NewClient returns a Client interface for given consul address
-func NewClient(addr string) (Client, error) {
-	config := consulapi.DefaultConfig()
-	config.Address = addr
+func NewClientWithDefaultConfig() (Client, error) {
+    return NewClient(consulapi.DefaultConfig())
+}
+
+// NewClient returns a Client interface for given consul address
+func NewClient(config *consulapi.Config) (Client, error) {
 	c, err := consulapi.NewClient(config)
 	if err != nil {
 		return nil, err

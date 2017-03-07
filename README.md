@@ -31,6 +31,10 @@ watch create/update KVPair
 
 get string value
 
+### GetInt(key string) (int, error)
+
+get int value
+
 ### Put(key string, value string) (*consulapi.WriteMeta, error)
 
 put KVPair

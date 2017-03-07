@@ -2,18 +2,32 @@ package consul
 
 import (
 	"errors"
+	"fmt"
 	"net"
+	"reflect"
 	"strconv"
+	"strings"
+
+	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
 )
 
+type ErrKVNotFound struct {
+	Key string
+}
+
+func (e ErrKVNotFound) Error() string {
+	return fmt.Sprintf("kv \"%s\" not found", e.Key)
+}
+
 var (
 	ErrInvalidServiceAddr = errors.New("invalid service address")
 	ErrInvalidPort        = errors.New("invalid port")
-	ErrServiceNotFound    = errors.New("service not found")
-    ErrKVNotFound         = errors.New("kv not found")
+	ErrInvalidTagOptions  = errors.New("invalid tag options")
 )
+
+var allowOptions = map[string]string{"name": ""}
 
 //Client provides an interface for getting data out of Consul
 type Client interface {
@@ -31,8 +45,12 @@ type Client interface {
 	WatchGet(key string) chan *consulapi.KVPair
 	// GetStr get string value
 	GetStr(key string) (string, error)
+	// GetInt get string value
+	GetInt(key string) (int, error)
 	// Put put KVPair
 	Put(key string, value string) (*consulapi.WriteMeta, error)
+	// Load struct
+	LoadStruct(parent string, i interface{}) error
 }
 
 type client struct {
@@ -54,7 +72,7 @@ func NewClientWithConsulClient(c *consulapi.Client) Client {
 
 // NewClient returns a Client interface for given consul address
 func NewClientWithDefaultConfig() (Client, error) {
-    return NewClient(consulapi.DefaultConfig())
+	return NewClient(consulapi.DefaultConfig())
 }
 
 // NewClient returns a Client interface for given consul address
@@ -72,9 +90,9 @@ func (c *client) Get(key string) (*consulapi.KVPair, *consulapi.QueryMeta, error
 	if err != nil {
 		return nil, nil, err
 	}
-    if kv == nil {
-        return nil, nil, ErrKVNotFound
-    }
+	if kv == nil {
+		return nil, nil, ErrKVNotFound{Key: key}
+	}
 
 	c.meta[key] = meta
 
@@ -91,9 +109,9 @@ func (c *client) WatchGet(key string) chan *consulapi.KVPair {
 			}
 			kv, meta, err := c.kv.Get(k, &consulapi.QueryOptions{WaitIndex: lastIndex})
 
-            if lastIndex == 1 && kv == nil {
-                continue
-            }
+			if lastIndex == 1 && kv == nil {
+				continue
+			}
 
 			if err != nil {
 				close(ch)
@@ -112,6 +130,18 @@ func (c *client) GetStr(key string) (string, error) {
 		return "", err
 	}
 	return string(kv.Value), nil
+}
+
+func (c *client) GetInt(key string) (int, error) {
+	v, err := c.GetStr(key)
+	if err != nil {
+		return 0, err
+	}
+	res, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, err
+	}
+	return res, nil
 }
 
 // Put KVPair
@@ -154,7 +184,7 @@ func (c *client) GetFirstService(service string, tag string) (*consulapi.Service
 		return nil, nil, err
 	}
 	if len(addrs) == 0 {
-		return nil, nil, ErrServiceNotFound
+		return nil, nil, errors.New(fmt.Sprintf("service \"%s\" not found", service))
 	}
 	return addrs[0], meta, nil
 }
@@ -167,7 +197,112 @@ func (c *client) GetServices(service string, tag string) ([]*consulapi.ServiceEn
 		return nil, nil, err
 	}
 	if len(addrs) == 0 {
-		return nil, nil, ErrServiceNotFound
+		return nil, nil, errors.New(fmt.Sprintf("service \"%s\" not found", service))
 	}
 	return addrs, meta, nil
+}
+
+func (c *client) LoadStruct(parent string, i interface{}) error {
+	return c.recursiveLoadStruct(parent, reflect.ValueOf(i).Elem())
+}
+
+func (c *client) recursiveLoadStruct(parent string, val reflect.Value) error {
+	for i := 0; i < val.NumField(); i++ {
+		value := val.Field(i)
+		field := val.Type().Field(i)
+
+		var tagOptions map[string]string
+		var err error
+
+		tag := field.Tag.Get("consul")
+		if tag != "" {
+			tagOptions, err = c.getTagOptions(tag)
+			if err != nil {
+				return err
+			}
+		}
+
+		var kvName string
+		if name, ok := tagOptions["name"]; ok {
+			kvName = name
+		} else {
+			kvName = strings.ToLower(field.Name)
+		}
+
+		path := fmt.Sprintf("%s/%s", parent, kvName)
+
+		if _, ok := value.Interface().(time.Time); ok {
+		} else if field.Type.Kind() == reflect.Struct {
+			err = c.recursiveLoadStruct(path, value)
+			if err != nil {
+				return err
+			}
+		} else {
+			kv, _, err := c.Get(path)
+			if err != nil {
+				return err
+			}
+			v, err := c.normalizeValue(field.Type.Kind(), kv.Value)
+			if err != nil {
+				return err
+			}
+			value.Set(reflect.ValueOf(v))
+		}
+	}
+	return nil
+}
+
+func (c *client) normalizeValue(kind reflect.Kind, value []byte) (interface{}, error) {
+	switch kind {
+	case reflect.String:
+		return string(value), nil
+	case reflect.Float32:
+		n, err := strconv.ParseFloat(strings.TrimSpace(string(value)), 32)
+		if err != nil {
+			return nil, err
+		}
+		return float32(n), nil
+	case reflect.Float64:
+		n, err := strconv.ParseFloat(strings.TrimSpace(string(value)), 64)
+		if err != nil {
+			return nil, err
+		}
+		return n, nil
+	case reflect.Int:
+		n, err := strconv.ParseInt(strings.TrimSpace(string(value)), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return int(n), nil
+	default:
+		return nil, errors.New(fmt.Sprintf("unsupported type \"%s\"", kind.String()))
+	}
+}
+
+func (c *client) getTagOptions(v string) (map[string]string, error) {
+	parts := strings.Split(v, ":")
+
+	size := len(parts)
+	if size%2 != 0 {
+		return nil, ErrInvalidTagOptions
+	}
+
+	res := make(map[string]string)
+	for i := 0; i < len(parts); i += 2 {
+		name := parts[i]
+		value := parts[i+1]
+
+		if !c.allowOption(name) {
+			continue
+		}
+
+		res[name] = value
+	}
+
+	return res, nil
+}
+
+func (c *client) allowOption(name string) bool {
+	_, ok := allowOptions[name]
+	return ok
 }

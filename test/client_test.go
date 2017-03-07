@@ -11,6 +11,19 @@ import (
 	"github.com/l-vitaly/gounit"
 )
 
+type Nested struct {
+	Name  string
+	Delay float32
+}
+
+type testStruct struct {
+	Name   string
+	Email  string
+	Offset int
+	Time   time.Time
+	Nested Nested
+}
+
 func makeTestClient() (consul.Client, error) {
 	return testutil.NewClient()
 }
@@ -45,6 +58,24 @@ func TestWatchPut(t *testing.T) {
 	kv, _, err := client.Get(key)
 	u.AssertNotError(err, "")
 	u.AssertNotNil(kv, "")
+}
+
+func TestLoadStruct(t *testing.T) {
+	u := gounit.New(t)
+
+	client, err := makeTestClient()
+	u.AssertNotError(err, "")
+
+	var s testStruct
+
+	err = client.LoadStruct("service", &s)
+	u.AssertNotError(err, "")
+
+	u.AssertEquals("test", s.Name, gounit.EmptyMessage)
+	u.AssertEquals("email", s.Email, gounit.EmptyMessage)
+	u.AssertEquals("name", s.Nested.Name, gounit.EmptyMessage)
+	u.AssertEquals(2, s.Offset, gounit.EmptyMessage)
+	u.AssertEquals(float32(2.33), s.Nested.Delay, gounit.EmptyMessage)
 }
 
 func TestWatchGet(t *testing.T) {

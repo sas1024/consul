@@ -78,6 +78,23 @@ func TestLoadStruct(t *testing.T) {
 	u.AssertEquals(float32(2.33), s.Nested.Delay, gounit.EmptyMessage)
 }
 
+func TestLoadStructDefaultValue(t *testing.T) {
+	u := gounit.New(t)
+
+	client, err := makeTestClient()
+	u.AssertNotError(err, "")
+
+	var s struct {
+		Name string `consul:"default:Rob Pike"`
+		Size int    `consul:"default:100"`
+	}
+
+	err = client.LoadStruct("service", &s)
+	u.AssertNotError(err, "Err")
+	u.AssertEquals("Rob Pike", s.Name, "Equals Name")
+	u.AssertEquals(100, s.Size, "Equals Size")
+}
+
 func TestWatchGet(t *testing.T) {
 	u := gounit.New(t)
 

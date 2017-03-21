@@ -27,7 +27,7 @@ var (
 	ErrInvalidTagOptions  = errors.New("invalid tag options")
 )
 
-var allowOptions = map[string]string{"name": ""}
+var allowOptions = map[string]string{"name": "", "default": ""}
 
 //Client provides an interface for getting data out of Consul
 type Client interface {
@@ -239,10 +239,24 @@ func (c *client) recursiveLoadStruct(parent string, val reflect.Value) error {
 			}
 		} else {
 			kv, _, err := c.Get(path)
+
 			if err != nil {
-				return err
+				if _, ok := err.(ErrKVNotFound); !ok {
+					return err
+				}
 			}
-			v, err := c.normalizeValue(field.Type.Kind(), kv.Value)
+
+			var fieldValue []byte
+
+			if kv == nil {
+				if defaultValue, ok := tagOptions["default"]; ok {
+					fieldValue = []byte(defaultValue)
+				}
+			} else {
+				fieldValue = kv.Value
+			}
+
+			v, err := c.normalizeValue(field.Type.Kind(), fieldValue)
 			if err != nil {
 				return err
 			}

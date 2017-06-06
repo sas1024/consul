@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
@@ -168,6 +167,10 @@ func (c *client) RegisterService(name string, addr string, tags ...string) error
 		Address: host,
 		Port:    port,
 		Tags:    tags,
+		Check: &consulapi.AgentServiceCheck{
+			TTL: "3s",
+			DeregisterCriticalServiceAfter: "10s",
+		},
 	}
 	return c.agent.ServiceRegister(reg)
 }
